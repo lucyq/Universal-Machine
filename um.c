@@ -1,0 +1,234 @@
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *
+ *                                                                   *
+ *                                 um                                *
+ *                                                                   *
+ *                File: um.c                                         *
+ *             Authors: Andrew Burgos and Lucy Qin                   *
+ *       Date Modified: November 13, 2014                            *
+ *             Purpose: Initializes the UM and interacts with        *
+ *                      various modules to execute                   *
+ *                      UM instructions as well as interact with     *
+ *                      the segmented memory.                        *
+ *                                                                   *
+ *                                                                   *
+ * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <sys/stat.h>
+
+#include "uarray.h"
+#include "bitpack.h"
+
+/*   U M   M O D U L E S   */
+#include "managemem.h"
+#include "alu.h"
+#include "io.h"
+
+
+
+enum opcodes {CONDMOVE = 0, SEGLOAD, SEGSTORE, ADD, MULTI, DIVIDE,
+              NAND, HALT, MAPSEG, UNMAPSEG, OUT, IN, LOADPROG, LOADVAL};
+
+typedef struct instruction {
+        unsigned opcode;
+        unsigned ra;
+        unsigned rb;
+        unsigned rc;
+        unsigned value;
+} *instruction;
+
+
+
+
+/* * * * * * * * * * * * * * * * * * * * * * * * *
+ *   F U N C T I O N   D E C L A R A T I O N S   *
+ * * * * * * * * * * * * * * * * * * * * * * * * */
+
+//static void initialize_registers (UArray_T registers);
+
+static void read_file(int argc, char *argv[], Memory mem);
+
+static void execute_instruction  (instruction decoded, int *registers[], 
+                                  Memory mem, uint32_t *program_counter);
+
+static void decode(uint32_t codeword, instruction decoded);
+                                  
+static void free_um_memory       (Memory mem);
+
+
+/* * * * * * * * * * * * * * * * * * 
+ *   I M P L E M E N T A T I O N   *
+ * * * * * * * * * * * * * * * * * */
+
+int main(int argc, char *argv[]) 
+{
+        /* initialize segmented memory */
+        Memory mem = initialize_memory();        
+        
+        /* create registers */
+        int* registers[8] = {0, 0, 0, 0, 0, 0, 0, 0};  
+       
+        /* initialize program counter */
+        uint32_t pc_value = 0;
+        uint32_t *program_counter = &pc_value;
+        
+        read_file(argc, argv, registers, mem);
+
+   //     initialize_registers(registers);
+
+        /* load in 32-bit instructions */
+        Um_instruction codeword = (fetch_instruction(program_counter, mem));  
+        instruction decoded = malloc(sizeof(*decoded));
+        decode(codeword, decoded);
+        
+               
+
+
+        while ( decoded->opcode != HALT ) {
+          
+
+                execute_instruction(decoded, registers, mem, program_counter);
+                codeword = (fetch_instruction(program_counter, mem));
+              
+              
+                decode(codeword, decoded);
+
+        }   
+        free(decoded);
+        free_um_memory(registers, mem);
+   
+        
+  
+}
+/*
+static void initialize_registers(UArray_T registers) 
+{
+        int i;
+        for (i = 0; i < UArray_length(registers); i++) {
+                int *value = UArray_at(registers, i);
+                *value = 0; 
+        }
+}
+*/
+
+static void read_file(int argc, char *argv[], Memory mem) 
+{
+        if (argc != 2) {
+                fprintf(stderr, "Error: please specify one file\n");
+                exit(EXIT_FAILURE);
+                free_memory(mem);
+        }
+
+
+        FILE *file_ptr = fopen(argv[1], "r");
+
+        struct stat file_stats;
+
+        if(stat(argv[1], &file_stats) == -1) {
+                fprintf(stderr, "Error within file\n");
+                exit(EXIT_FAILURE);
+                fclose(file_ptr);
+                free_memory(mem);
+        }
+        
+        if (file_stats.st_size % 4 != 0) {
+                fprintf(stderr, "Error: File does not contain ");
+                fprintf(stderr, "correctly formatted instruction\n");
+                exit(EXIT_FAILURE);
+                fclose(file_ptr);
+                free_memory(mem);
+                
+        }
+        int totalwords = file_stats.st_size / 4;
+        
+        initialize_segzero(file_ptr, mem, totalwords);
+        
+        
+}
+
+
+static void decode(uint32_t codeword, instruction decoded) 
+{
+        uint32_t opcode = Bitpack_getu(codeword, 4, 28);
+        assert(opcode < 14);
+        
+        decoded->opcode = opcode;
+
+        if ( decoded->opcode == LOADVAL ) {
+                decoded->ra = Bitpack_getu(codeword, 3, 25);
+                assert(decoded->ra <= 7);
+                decoded->value = Bitpack_getu(codeword, 25, 0);
+        } else {
+                decoded->ra = Bitpack_getu(codeword, 3, 6);
+                decoded->rb = Bitpack_getu(codeword, 3, 3);
+                decoded->rc = Bitpack_getu(codeword, 3, 0);
+        }
+                
+                
+}
+
+/* Executes UM instruction based off decoded opcode */
+static void execute_instruction(instruction decoded, UArray_T registers, 
+                                Memory mem, uint32_t *program_counter) 
+{
+        switch ( decoded->opcode ) {
+                case 0:
+                        cond_move(decoded->ra, decoded->rb, decoded->rc, 
+                                  registers);
+                        break;
+                case 1:
+                        segmented_load(decoded->ra, decoded->rb, decoded->rc,
+                                       registers, mem);
+                        break;
+                case 2: 
+                        segmented_store(decoded->ra, decoded->rb, decoded->rc,
+                                        registers, mem);
+                        break;
+                case 3:
+                        addition(decoded->ra, decoded->rb, decoded->rc, 
+                                 registers);
+                        break;
+                case 4:
+                        multiply(decoded->ra, decoded->rb, decoded->rc, 
+                                 registers);
+                        break;
+                case 5: 
+                        division(decoded->ra, decoded->rb, decoded->rc,
+                                 registers);
+                        break;
+                case 6: 
+                        nand(decoded->ra, decoded->rb, decoded->rc, registers);
+                        break;
+                case 7: 
+                        return;
+                case 8: 
+                        map_segment(decoded->rb, decoded->rc, registers, mem);
+                        break;
+                case 9: 
+                        unmap_segment(decoded->rc, registers, mem);
+                        break;
+                case 10: 
+                        output(decoded->rc, registers);
+                        break;
+                case 11: 
+                        input(decoded->rc, registers);
+                        break;
+                case 12: 
+                        load_program(decoded->rb, decoded->rc, registers, 
+                                     mem, program_counter); 
+                        break;
+                case 13: 
+                        load_value(decoded->ra, decoded->value, registers);
+                        break;
+        }
+        
+        if (decoded->opcode != 12) {
+                *program_counter = *program_counter + 1;
+        
+        }
+}
+
+
+
