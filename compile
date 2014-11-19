@@ -20,7 +20,7 @@ LIBS="$CIILIBS -lcii40-O2 -lnetpbm -lm -lbitpack" $LIBS
 LFLAGS="-L/comp/40/lib64" 
 
 # these flags max out warnings and debug info
-FLAGS="-g -O0 -Wall -Wextra -Werror -Wfatal-errors -std=c99 -pedantic"
+FLAGS="-g -O2 -Wall -Wextra -Werror -Wfatal-errors -std=c99 -pedantic"
 
 rm -f *.o  # make sure no object files are left hanging around
 
@@ -32,13 +32,14 @@ esac
 for cfile 
 do
   gcc $FLAGS $CFLAGS -c $cfile
+  gcc $FLAGS $CFLAGS -S $cfile
 done
 
 ########### the middle part is different for each assignment
 # link together .o files + libraries to make executable binaries
 # using one case statement per executable binary
 case $link in
-  all|um) gcc $FLAGS -o um um.o managemem.o alu.o bitpack.o io.o \
+  all|um) gcc $FLAGS -o um um.o bitpack.o \
               $LIBS $LFLAGS 
               linked=yes ;;
 esac
