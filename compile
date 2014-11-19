@@ -31,15 +31,15 @@ esac
 # compile each argument to a .o file
 for cfile 
 do
-  gcc $FLAGS $CFLAGS -c $cfile
   gcc $FLAGS $CFLAGS -S $cfile
+  gcc $FLAGS $CFLAGS -c $cfile
 done
 
 ########### the middle part is different for each assignment
 # link together .o files + libraries to make executable binaries
 # using one case statement per executable binary
 case $link in
-  all|um) gcc $FLAGS -o um um.o bitpack.o \
+  all|um) gcc $FLAGS -o um um.o \
               $LIBS $LFLAGS 
               linked=yes ;;
 esac

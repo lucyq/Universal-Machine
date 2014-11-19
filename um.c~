@@ -4,12 +4,8 @@
 #include <sys/stat.h>
 
 #include "seq.h"
-#include "assert.h"
+//#include "bitpack.h"
 
-#include "bitpack.h"
-
-enum opcodes {CONDMOVE = 0, SEGLOAD, SEGSTORE, ADD, MULTI, DIVIDE,
-              NAND, HALT, MAPSEG, UNMAPSEG, OUT, IN, LOADPROG, LOADVAL};
 
 typedef uint32_t Um_instruction;
 typedef uint32_t Um_segmentID;
@@ -17,6 +13,7 @@ typedef uint32_t Um_segmentID;
 /* * * * * * * * * * * * * * * * * * * * * * * * * *
  *   S T R U C T U R E   D E C L A R A T I O N S   *
  * * * * * * * * * * * * * * * * * * * * * * * * * */              
+
 typedef struct SegArr {
         int len;
         uint32_t *arr;
@@ -25,7 +22,7 @@ typedef struct SegArr {
 
 typedef struct Memory {
         Seq_T segments;
-        Seq_T unused_ids;
+        uint32_t unused_ids[];
         SegArr seg_zero;
         int num_indices;
 } *Memory;
@@ -104,7 +101,6 @@ static inline void output(unsigned rc, uint32_t registers[])
 /*
  * - - - M E M O R Y - - - *
  */
-//static void copy_segment(SegArr copied_segment, SegArr segment_zero);
 static void addSequenceIndices(Memory mem, Um_segmentID nextID);
 static Memory initialize_memory();
 
@@ -113,7 +109,7 @@ static Memory initialize_memory() {
         Memory mem = malloc(sizeof(*mem)); 
         mem->num_indices = 100;
         mem->segments = Seq_new(mem->num_indices);        
-        mem->unused_ids = Seq_new(mem->num_indices);
+        mem->unused_ids = malloc(400);
         
         
         addSequenceIndices(mem, 0);
@@ -123,7 +119,8 @@ static Memory initialize_memory() {
 
 void initialize_segzero(FILE *file_ptr, Memory mem, int totalwords) {
         SegArr seg_zero = malloc(sizeof(*seg_zero));
-        seg_zero->arr = malloc(totalwords * sizeof(uint32_t));
+   
+        seg_zero->arr = malloc(totalwords * 4);
         seg_zero->len = totalwords;
                 
         uint32_t instruct = 0;
@@ -134,7 +131,9 @@ void initialize_segzero(FILE *file_ptr, Memory mem, int totalwords) {
         while((instruct_byte = getc(file_ptr)) != (unsigned)EOF) {
            
                 lsb = lsb - 8;
-                instruct = Bitpack_newu(instruct, 8, lsb, instruct_byte);
+                instruct = instruct << 8; 
+                instruct = instruct | instruct_byte;
+//                instruct = Bitpack_newu(instruct, 8, lsb, instruct_byte);
                 
                 if (lsb == 0) {
                         seg_zero->arr[instruction_count] = instruct;
@@ -155,11 +154,13 @@ void initialize_segzero(FILE *file_ptr, Memory mem, int totalwords) {
 void addSequenceIndices(Memory mem, Um_segmentID nextID) {
 
         int i;
+       
         for ( i = 0; i < mem->num_indices; i++ ) {
                 Seq_addhi(mem->segments, NULL);
         }
         
-        for ( i = 0; i < mem->num_indices; i++ ) {       
+        for ( i = 0; i < mem->num_indices; i++ ) {
+                mem->unused_ids
                 Seq_addhi(mem->unused_ids, (void *)(uintptr_t)nextID);
                 nextID++;
         }
@@ -171,12 +172,14 @@ static void segmented_load(unsigned ra, unsigned rb, unsigned rc,
 
 /* Access segmented memory at segment b offset c and loads into register a*/
 static void segmented_load(unsigned ra, unsigned rb, unsigned rc, 
+                           uint32_t registers[], Memory mem); 
+
+static void segmented_load(unsigned ra, unsigned rb, unsigned rc, 
                            uint32_t registers[], Memory mem) 
 {        
         SegArr segment = Seq_get(mem->segments, registers[rb]);       
 
-        int index = registers[rc];
-        registers[ra] = segment->arr[index];
+        registers[ra] = segment->arr[registers[rc]];
         
 }
 static void segmented_store(unsigned ra, unsigned rb, unsigned rc, 
@@ -187,7 +190,7 @@ static void segmented_store(unsigned ra, unsigned rb, unsigned rc,
                             uint32_t registers[], Memory mem)
 {               
         SegArr segment = Seq_get(mem->segments, registers[ra]);
- 
+        
         segment->arr[registers[rb]] = registers[rc];
 }
 
@@ -203,13 +206,13 @@ static void map_segment(unsigned rb, unsigned rc,
 {       
         SegArr new_segment = malloc(sizeof(*new_segment));
         new_segment->len = registers[rc];
+        new_segment->arr = calloc(new_segment->len, 4);
         
-        new_segment->arr = calloc(registers[rc], sizeof(uint32_t));
-              
         if (Seq_length(mem->unused_ids) == 1) {
                 Um_segmentID nextID = Seq_length(mem->segments);
                 addSequenceIndices(mem, nextID);
         }       
+        
         Um_segmentID curr_ID = (Um_segmentID)(uintptr_t)Seq_remlo(mem->unused_ids);
       
         Seq_put(mem->segments, curr_ID, new_segment);
@@ -228,6 +231,7 @@ static void unmap_segment(unsigned rc, uint32_t registers[], Memory mem)
         SegArr removed_segment = (SegArr)Seq_get(mem->segments, 
                                                  registers[rc]);
 
+        free(removed_segment->arr);
         free(removed_segment);
         
         Seq_put(mem->segments, registers[rc], NULL);
@@ -255,16 +259,18 @@ static void load_program(unsigned rb, unsigned rc, uint32_t registers[],
         
         SegArr segment_zero = (Seq_get(mem->segments, 0));
     
-        if (segment_zero != NULL) {
+        if (segment_zero->arr != NULL) {
+                free(segment_zero->arr);
                 free(segment_zero);
         }
         segment_zero = malloc(sizeof(*segment_zero));
         segment_zero->len = copied_segment->len;
-        
-        for (int i = 0; i < segment_zero->len; i++ ) {
-                segment_zero[i] = copied_segment[i];
+        segment_zero->arr = malloc(segment_zero->len * 4);
+
+        for (int i = 0; i < copied_segment->len; i++) {
+                segment_zero->arr[i] = copied_segment->arr[i];
         }
-       
+        mem->seg_zero = segment_zero;
 }
 
 static void free_memory(Memory mem);
@@ -314,7 +320,7 @@ int main(int argc, char *argv[])
         int opcode;
         opcode = decode(codeword, registers, mem, program_counter);
         
-        while ( opcode != HALT ) {
+        while (opcode != 7) {
                 codeword = mem->seg_zero->arr[*program_counter];                  
 
                 opcode = decode(codeword, registers, mem, program_counter);
@@ -371,6 +377,7 @@ static int decode(uint32_t codeword, uint32_t registers[],
         uint32_t ra = ((codeword & ra_mask) >> 6);
         uint32_t rb = ((codeword & rb_mask) >> 3); 
         uint32_t rc = (codeword & rc_mask); 
+
     
         switch (opcode) {
                 case 0:
