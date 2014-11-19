@@ -377,23 +377,11 @@ static int decode(uint32_t codeword, uint32_t registers[],
 	uint32_t rc_mask = 7;
 	uint32_t opcode = ((codeword & op_mask) >> 28);
 
-        uint32_t ra = 0;
-        uint32_t rb = 0;
-        uint32_t rc = 0;
-       
-        if(opcode < 7) {
-		ra = ((codeword & ra_mask) >> 6);
-		rb = ((codeword & rb_mask) >> 3);
-		rc = (codeword & rc_mask);
-        }
-        else if(opcode == 8 || opcode == 12) {
-		rb = ((codeword & rb_mask) >> 3);
-		rc = (codeword & rc_mask);
-        } else if (opcode != 7) {
-  		rc = (codeword & rc_mask);
-        }
-                
-        switch ( opcode ) {
+        uint32_t ra = ((codeword & ra_mask) >> 6);
+        uint32_t rb = ((codeword & rb_mask) >> 3); 
+        uint32_t rc = (codeword & rc_mask); 
+    
+        switch (opcode) {
                 case 0:
                         cond_move(ra, rb, rc, 
                                   registers);
