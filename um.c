@@ -5,24 +5,28 @@
 
 #include "seq.h"
 #include "assert.h"
-#include "uarray.h"
+
 #include "bitpack.h"
 
 enum opcodes {CONDMOVE = 0, SEGLOAD, SEGSTORE, ADD, MULTI, DIVIDE,
               NAND, HALT, MAPSEG, UNMAPSEG, OUT, IN, LOADPROG, LOADVAL};
 
 typedef uint32_t Um_instruction;
-typedef uint32_t *word;
 typedef uint32_t Um_segmentID;
                   
 /* * * * * * * * * * * * * * * * * * * * * * * * * *
  *   S T R U C T U R E   D E C L A R A T I O N S   *
  * * * * * * * * * * * * * * * * * * * * * * * * * */              
+typedef struct SegArr {
+        int len;
+        uint32_t *arr;
+} *SegArr;
+
 
 typedef struct Memory {
         Seq_T segments;
         Seq_T unused_ids;
-        UArray_T seg_zero;
+        SegArr seg_zero;
         int num_indices;
 } *Memory;
               
@@ -100,18 +104,17 @@ static inline void output(unsigned rc, uint32_t registers[])
 /*
  * - - - M E M O R Y - - - *
  */
-
-static void initialize_segment(UArray_T segment); 
-static UArray_T copy_segment(UArray_T copied_segment, UArray_T segment_zero);
+//static void copy_segment(SegArr copied_segment, SegArr segment_zero);
 static void addSequenceIndices(Memory mem, Um_segmentID nextID);
+static Memory initialize_memory();
 
-static inline Memory initialize_memory() {
+static Memory initialize_memory() {
         
         Memory mem = malloc(sizeof(*mem)); 
+        mem->num_indices = 100;
         mem->segments = Seq_new(mem->num_indices);        
         mem->unused_ids = Seq_new(mem->num_indices);
         
-        mem->num_indices = 100;
         
         addSequenceIndices(mem, 0);
         
@@ -119,8 +122,10 @@ static inline Memory initialize_memory() {
 }
 
 void initialize_segzero(FILE *file_ptr, Memory mem, int totalwords) {
-        UArray_T seg_zero = UArray_new(totalwords, sizeof(uint32_t));
-        
+        SegArr seg_zero = malloc(sizeof(*seg_zero));
+        seg_zero->arr = malloc(totalwords * sizeof(uint32_t));
+        seg_zero->len = totalwords;
+                
         uint32_t instruct = 0;
         uint32_t instruct_byte;
         int instruction_count = 0;
@@ -132,7 +137,7 @@ void initialize_segzero(FILE *file_ptr, Memory mem, int totalwords) {
                 instruct = Bitpack_newu(instruct, 8, lsb, instruct_byte);
                 
                 if (lsb == 0) {
-                        *(uint32_t *) UArray_at(seg_zero, instruction_count) = instruct;
+                        seg_zero->arr[instruction_count] = instruct;
                         instruction_count++;
                         lsb = 32;
                 }
@@ -161,74 +166,69 @@ void addSequenceIndices(Memory mem, Um_segmentID nextID) {
         mem->num_indices = mem->num_indices * 2;
 }
 
+static void segmented_load(unsigned ra, unsigned rb, unsigned rc, 
+                           uint32_t registers[], Memory mem); 
 
 /* Access segmented memory at segment b offset c and loads into register a*/
-static inline void segmented_load(unsigned ra, unsigned rb, unsigned rc, 
+static void segmented_load(unsigned ra, unsigned rb, unsigned rc, 
                            uint32_t registers[], Memory mem) 
 {        
-        UArray_T segment = Seq_get(mem->segments, registers[rb]);       
+        SegArr segment = Seq_get(mem->segments, registers[rb]);       
 
-        word value = UArray_at(segment, registers[rc]);
+        int index = registers[rc];
+        registers[ra] = segment->arr[index];
         
-        registers[ra] = *value;    
 }
+static void segmented_store(unsigned ra, unsigned rb, unsigned rc, 
+                            uint32_t registers[], Memory mem);
 
 /* Stores value at register c into segmented memory */
-static inline void segmented_store(unsigned ra, unsigned rb, unsigned rc, 
+static void segmented_store(unsigned ra, unsigned rb, unsigned rc, 
                             uint32_t registers[], Memory mem)
 {               
-        UArray_T segment = Seq_get(mem->segments, registers[ra]);
+        SegArr segment = Seq_get(mem->segments, registers[ra]);
  
-        word value = UArray_at(segment, registers[rb]);
-        
-        *value = registers[rc];  
+        segment->arr[registers[rb]] = registers[rc];
 }
 
 /* Creates a new segment with a number of words equal to the value in register 
  * a
  */
-static inline void map_segment(unsigned rb, unsigned rc, 
+static void map_segment(unsigned rb, unsigned rc, 
+                        uint32_t registers[], Memory mem);
+
+
+static void map_segment(unsigned rb, unsigned rc, 
                         uint32_t registers[], Memory mem)
-{
-        uint32_t seg_length = registers[rc];
-        Um_segmentID curr_ID;
-    
-        UArray_T new_segment = UArray_new(seg_length, sizeof(uint32_t));
-   
+{       
+        SegArr new_segment = malloc(sizeof(*new_segment));
+        new_segment->len = registers[rc];
+        
+        new_segment->arr = calloc(registers[rc], sizeof(uint32_t));
+              
         if (Seq_length(mem->unused_ids) == 1) {
                 Um_segmentID nextID = Seq_length(mem->segments);
                 addSequenceIndices(mem, nextID);
         }       
-        curr_ID = (Um_segmentID)(uintptr_t)Seq_remlo(mem->unused_ids);
-        
-        initialize_segment(new_segment);
-     
-        Seq_put(mem->segments, curr_ID, new_segment);
+        Um_segmentID curr_ID = (Um_segmentID)(uintptr_t)Seq_remlo(mem->unused_ids);
       
-               
+        Seq_put(mem->segments, curr_ID, new_segment);
         
         registers[rb] = curr_ID;
 }
 
-/* initializes segment to hold words containing 0 */
-static void initialize_segment(UArray_T segment) 
-{
-        uint32_t i;
-        for ( i = 0; i < (uint32_t)UArray_length(segment); i++ ) {
-                word value = UArray_at(segment, i);
-                *value = 0;      
-        }
-}
 
 /* Frees segmented memory associated with segID at register ra, then stores 
  * segID for later use 
  */
-static inline void unmap_segment(unsigned rc, uint32_t registers[], Memory mem)
-{       
-        UArray_T removed_segment = (UArray_T)Seq_get(mem->segments, 
-                                                     registers[rc]);
+static void unmap_segment(unsigned rc, uint32_t registers[], Memory mem);
 
-        UArray_free(&removed_segment);
+static void unmap_segment(unsigned rc, uint32_t registers[], Memory mem)
+{       
+        SegArr removed_segment = (SegArr)Seq_get(mem->segments, 
+                                                 registers[rc]);
+
+        free(removed_segment);
         
         Seq_put(mem->segments, registers[rc], NULL);
 
@@ -238,7 +238,11 @@ static inline void unmap_segment(unsigned rc, uint32_t registers[], Memory mem)
 /* Segmented memory associated with segID at register ra is duplicated and
  * stored into segment zero 
  */
-static inline void load_program(unsigned rb, unsigned rc, uint32_t registers[], 
+static void load_program(unsigned rb, unsigned rc, uint32_t registers[], 
+                        Memory mem, uint32_t *program_counter);
+
+
+static void load_program(unsigned rb, unsigned rc, uint32_t registers[], 
                         Memory mem, uint32_t *program_counter)
 {                
         *program_counter = registers[rc];
@@ -247,44 +251,33 @@ static inline void load_program(unsigned rb, unsigned rc, uint32_t registers[],
                 return;
         }
         
-        UArray_T copied_segment = (Seq_get(mem->segments, registers[rb]));
+        SegArr copied_segment = (Seq_get(mem->segments, registers[rb]));
         
-        UArray_T segment_zero = (Seq_get(mem->segments, 0));
+        SegArr segment_zero = (Seq_get(mem->segments, 0));
     
-        if ( segment_zero != NULL ) {
-                UArray_free(&segment_zero);
+        if (segment_zero != NULL) {
+                free(segment_zero);
         }
+        segment_zero = malloc(sizeof(*segment_zero));
+        segment_zero->len = copied_segment->len;
         
-        segment_zero = copy_segment(copied_segment, segment_zero);
-        
+        for (int i = 0; i < segment_zero->len; i++ ) {
+                segment_zero[i] = copied_segment[i];
+        }
+       
 }
 
-/* Copies the value of one segment into segment zero */
-static UArray_T copy_segment(UArray_T copied_segment, UArray_T segment_zero)
-{
-        int i;
-        int segment_length = UArray_length(copied_segment);
-        
-        segment_zero = UArray_new(segment_length, UArray_size(copied_segment));
-        
-        for ( i = 0; i < segment_length; i++ ) {
-                word value = *((word*)UArray_at(copied_segment, i));
-               
-                word *duplicate_value = (word *)UArray_at(segment_zero, i);
-                *duplicate_value = value;
-        }
-        return segment_zero;
-}
-
-static inline void free_memory(Memory mem) {
+static void free_memory(Memory mem);
+static void free_memory(Memory mem) {
         
 
         int i;
         
         for (i = 0; i < Seq_length(mem->segments); i++) {
                 if (Seq_get(mem->segments, i) != NULL) {
-                        UArray_T segment = Seq_get(mem->segments, i); 
-                        UArray_free(&segment);
+                        SegArr segment = Seq_get(mem->segments, i); 
+                        free(segment->arr);
+                        free(segment);
                 }
         }
 
@@ -316,15 +309,13 @@ int main(int argc, char *argv[])
         read_file(argc, argv, mem);
 
         /* load in 32-bit instructions */
-        
-        Um_instruction codeword = *((Um_instruction*) UArray_at(mem->seg_zero, 
-                                                             *program_counter));  
+        Um_instruction codeword = mem->seg_zero->arr[*program_counter]; 
+ 
         int opcode;
         opcode = decode(codeword, registers, mem, program_counter);
         
         while ( opcode != HALT ) {
-                codeword = *((Um_instruction*) UArray_at(mem->seg_zero, 
-                                                             *program_counter));                       
+                codeword = mem->seg_zero->arr[*program_counter];                  
 
                 opcode = decode(codeword, registers, mem, program_counter);
         }   
