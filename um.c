@@ -3,8 +3,6 @@
 #include <stdint.h>
 #include <sys/stat.h>
 
-//#include "bitpack.h"
-
 
 typedef uint32_t Um_instruction;
 typedef uint32_t Um_segmentID;
@@ -15,19 +13,17 @@ typedef uint32_t Um_segmentID;
 
 typedef struct SegArr {
         int len;
-        uint32_t *arr;
+        uint32_t arr[];
 } *SegArr;
 
 
-
 typedef struct Memory {
-        uint32_t *unused_ids;
         unsigned top_id;
-
-        SegArr *segments;
-        SegArr seg_zero;
-        
         int num_indices;
+        
+        uint32_t *unused_ids;
+        SegArr seg_zero;
+        SegArr segments[];
 } *Memory;
               
 
@@ -151,9 +147,9 @@ static inline void Stack_resize(Memory mem)
 
 static Memory initialize_memory() {
         
-        Memory mem = malloc(sizeof(*mem)); 
+      //  SegArr temp;
+        Memory mem = malloc(sizeof(*mem) + 1000 * sizeof(*mem->segments)); 
         mem->unused_ids = malloc(4000);
-        mem->segments = malloc(8000); // 1000 pointers
                 
         mem->top_id = 1000;
         
@@ -184,9 +180,9 @@ static Memory initialize_memory() {
 
 static void initialize_segzero(FILE *file_ptr, Memory mem, int totalwords) 
 {
-        SegArr seg_zero = malloc(sizeof(*seg_zero));
-   
-        seg_zero->arr = malloc(totalwords << 2);
+        /* checked */
+        SegArr seg_zero = malloc(sizeof(*seg_zero) + (totalwords << 2));
+ 
         seg_zero->len = totalwords;
                 
         uint32_t instruct = 0;
@@ -221,30 +217,55 @@ static void initialize_segzero(FILE *file_ptr, Memory mem, int totalwords)
         fclose(file_ptr);
 }
 
+static inline void free_memory(Memory mem) 
+{
+        
+
+        int i;
+        int len = mem->num_indices;
+        for (i = 0; i < len; i++) {
+                if (mem->segments[i] != NULL) {
+                        SegArr segment = mem->segments[i]; 
+                        free(segment);
+                }
+        }
+
+       free(mem->unused_ids);
+       free(mem);
+}
+
+
 /* Adds additional sequences once unused_id and segment sequences 
  * have been filled 
  */
 static inline void addSequenceIndices(Memory mem) {
 
         int total_len = mem->num_indices;
-
-        SegArr *new_arr = malloc(total_len << 4);
-        int i;
-        for (i = total_len - 1; i >= 0; i--) {
-                new_arr[i] = mem->segments[i];
-        }
         
         int new_len = total_len << 1;
+
+        //SegArr temp;
+        Memory new_mem = malloc(sizeof(*new_mem) + 
+                               (new_len * sizeof(*new_mem->segments)));
+        new_mem->top_id = mem->top_id;
+        new_mem->num_indices = mem->num_indices;
+        new_mem->unused_ids = mem->unused_ids;
+        new_mem->seg_zero = mem->seg_zero;
+        
+        int i;
+        for (i = total_len - 1; i >= 0; i--) {
+                new_mem->segments[i] = mem->segments[i];
+        }
+        
    
         for (i = total_len; i < new_len; i++ ) {
-                new_arr[total_len] = NULL;
+                new_mem->segments[total_len] = NULL;
                 total_len++;
         }
         
-        free(mem->segments);
-        mem->segments = new_arr;
-        Stack_resize(mem);
-       
+        Stack_resize(new_mem);
+        mem = new_mem;
+
 }
 
 
@@ -263,7 +284,10 @@ static inline void segmented_store(unsigned ra, unsigned rb, unsigned rc,
 {               
         SegArr segment = mem->segments[registers[ra]];
         
+        fprintf(stderr, "reg b: %u\n", registers[rb]);
         segment->arr[registers[rb]] = registers[rc];
+        fprintf(stderr, "%u\n", segment->arr[registers[rb]]);        
+    
 }
 
 /* Creates a new segment with a number of words equal to the value in register 
@@ -273,17 +297,22 @@ static inline void map_segment(unsigned rb, unsigned rc,
                         uint32_t registers[], Memory mem)
 {       
         int seg_len = registers[rc];
-        SegArr new_segment = malloc(sizeof(*new_segment));
+        SegArr new_segment = malloc(sizeof(*new_segment) + (seg_len << 2));
         new_segment->len = seg_len;
-        new_segment->arr = calloc(seg_len, 4);
+        
+        for (int i = 0; i < seg_len; i++) {
+                new_segment->arr[i] = 0;       
+        }
         
         if ((mem->top_id) == 0) {
                 addSequenceIndices(mem);
         }       
         
         Um_segmentID curr_ID = Stack_pop(mem);
-        mem->segments[curr_ID] = new_segment;
-                
+        SegArr currSeg = mem->segments[curr_ID];
+        currSeg = new_segment;
+
+        (void)currSeg;
         registers[rb] = curr_ID;
 }
 
@@ -291,7 +320,6 @@ static inline void unmap_segment(unsigned rc, uint32_t registers[], Memory mem)
 {       
         SegArr removed_segment = mem->segments[registers[rc]];
 
-        free(removed_segment->arr);
         free(removed_segment);
 
         mem->segments[registers[rc]] = NULL;
@@ -310,41 +338,17 @@ static inline void load_program(unsigned rb, uint32_t registers[],
         
         SegArr copied_segment = mem->segments[registers[rb]];
         
-        SegArr segment_zero = mem->segments[0];
-    
-        if (segment_zero->arr != NULL) {
-                free(segment_zero->arr);
-                free(segment_zero);
-        }
+        free(mem->segments[0]);
+        
         int seg_len = copied_segment->len;
-        segment_zero = malloc(sizeof(*segment_zero));
-        segment_zero->len = seg_len;
-        segment_zero->arr = malloc(segment_zero->len << 2);
+        
+        SegArr new_zero = malloc(sizeof(*new_zero) + (seg_len << 2));
 
         for (int i = 0; i < seg_len; i++) {
-                segment_zero->arr[i] = copied_segment->arr[i];
+                new_zero->arr[i] = copied_segment->arr[i];
         }
-        mem->seg_zero = segment_zero;
-}
-
-static inline void free_memory(Memory mem) {
-        
-
-        int i;
-        int len = mem->num_indices;
-        for (i = 0; i < len; i++) {
-                if (mem->segments[i] != NULL) {
-                        SegArr segment = mem->segments[i]; 
-                        free(segment->arr);
-                        free(segment);
-                }
-        }
-        
-        
-       free(mem->unused_ids);
-       free(mem->segments);
-
-       free(mem);
+        mem->segments[0] = new_zero;
+        mem->seg_zero = new_zero;
 }
 
 
