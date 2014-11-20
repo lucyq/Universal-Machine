@@ -22,7 +22,6 @@ typedef struct SegArr {
 
 typedef struct Memory {
         uint32_t *unused_ids;
-        unsigned ids_len;
         unsigned top_id;
 
         SegArr *segments;
@@ -118,23 +117,29 @@ static inline void Stack_push(Memory mem, uint32_t value)
 static inline void Stack_resize(Memory mem)
 {
 
-        unsigned curr_len = mem->ids_len;
-        unsigned i;
-        unsigned new_len = curr_len << 1;
+        unsigned curr_len = mem->num_indices;
+ 
+        int new_len = curr_len << 1;
         int x = new_len - 1;
+ 
+        int i = curr_len - 1;
         uint32_t *new_stack = malloc(curr_len << 3);
-        for (i = 0; i < curr_len; i++) {
-                new_stack[i] = x;
-                x--;
+        
+        /* Fills first half of new array */
+        while (i >= 0) { 
+                new_stack[i--] = x--;
         }
         
-        
-        for (i = curr_len; i <  new_len; i++) {
+        for (i = curr_len; i < new_len; i = i + 5) {
                 new_stack[i] = mem->unused_ids[i-curr_len];
+                new_stack[i + 1] = mem->unused_ids[i-curr_len+1];
+                new_stack[i + 2] = mem->unused_ids[i-curr_len+2];
+                new_stack[i + 3] = mem->unused_ids[i-curr_len+3];
+                new_stack[i + 4] = mem->unused_ids[i-curr_len+4];
         }
         free(mem->unused_ids);
         mem->unused_ids = new_stack;
-        mem->ids_len = new_len;
+        mem->num_indices = new_len;
         mem->top_id = new_len - curr_len;
 
 }
@@ -150,20 +155,27 @@ static Memory initialize_memory() {
         mem->unused_ids = malloc(4000);
         mem->segments = malloc(8000); // 1000 pointers
                 
-        mem->ids_len = 1000;
         mem->top_id = 1000;
         
-        int i;
-        for (i = 999; i >= 0; i--) {
-                mem->segments[i] = NULL;
-        }
+        int i = 999;
         
+        while (i >= 0) {
+                mem->segments[i--] = NULL;
+                mem->segments[i--] = NULL;
+                mem->segments[i--] = NULL;
+                mem->segments[i--] = NULL;
+                mem->segments[i--] = NULL;
+            }
+      
         int index = 0;
-        for (i = 999 ; i >= 0; i--) {
-                mem->unused_ids[i] = index;
-                index++;
+        i = 999;
+        while (i >= 0) {
+                mem->unused_ids[i--] = index++;
+                mem->unused_ids[i--] = index++;
+                mem->unused_ids[i--] = index++;
+                mem->unused_ids[i--] = index++;
+                mem->unused_ids[i--] = index++;
         }
-        
 
         mem->num_indices = 1000; 
         
@@ -174,7 +186,7 @@ static void initialize_segzero(FILE *file_ptr, Memory mem, int totalwords)
 {
         SegArr seg_zero = malloc(sizeof(*seg_zero));
    
-        seg_zero->arr = malloc(totalwords * 4);
+        seg_zero->arr = malloc(totalwords << 2);
         seg_zero->len = totalwords;
                 
         uint32_t instruct = 0;
@@ -198,8 +210,6 @@ static void initialize_segzero(FILE *file_ptr, Memory mem, int totalwords)
                 
                 seg_zero->arr[instruction_count] = instruct;
                 instruction_count++;
-
-                
         }
         mem->segments[0] = seg_zero;
 
@@ -218,12 +228,14 @@ static inline void addSequenceIndices(Memory mem) {
 
         int total_len = mem->num_indices;
 
-        SegArr *new_arr = malloc(16 * total_len);
+        SegArr *new_arr = malloc(total_len << 4);
         int i;
-        for (i = 0; i < total_len; i++) {
+        for (i = total_len - 1; i >= 0; i--) {
                 new_arr[i] = mem->segments[i];
         }
+        
         int new_len = total_len << 1;
+   
         for (i = total_len; i < new_len; i++ ) {
                 new_arr[total_len] = NULL;
                 total_len++;
@@ -233,7 +245,6 @@ static inline void addSequenceIndices(Memory mem) {
         mem->segments = new_arr;
         Stack_resize(mem);
        
-        mem->num_indices = new_len;
 }
 
 
@@ -261,9 +272,10 @@ static inline void segmented_store(unsigned ra, unsigned rb, unsigned rc,
 static inline void map_segment(unsigned rb, unsigned rc, 
                         uint32_t registers[], Memory mem)
 {       
+        int seg_len = registers[rc];
         SegArr new_segment = malloc(sizeof(*new_segment));
-        new_segment->len = registers[rc];
-        new_segment->arr = calloc(new_segment->len, 4);
+        new_segment->len = seg_len;
+        new_segment->arr = calloc(seg_len, 4);
         
         if ((mem->top_id) == 0) {
                 addSequenceIndices(mem);
@@ -288,10 +300,9 @@ static inline void unmap_segment(unsigned rc, uint32_t registers[], Memory mem)
 
 }
 
-static inline void load_program(unsigned rb, unsigned rc, uint32_t registers[], 
-                        Memory mem, uint32_t *program_counter)
+static inline void load_program(unsigned rb, uint32_t registers[], 
+                        Memory mem)
 {                
-        *program_counter = registers[rc];
         
         if ( registers[rb] == 0 ) {
                 return;
@@ -305,11 +316,12 @@ static inline void load_program(unsigned rb, unsigned rc, uint32_t registers[],
                 free(segment_zero->arr);
                 free(segment_zero);
         }
+        int seg_len = copied_segment->len;
         segment_zero = malloc(sizeof(*segment_zero));
-        segment_zero->len = copied_segment->len;
-        segment_zero->arr = malloc(segment_zero->len * 4);
+        segment_zero->len = seg_len;
+        segment_zero->arr = malloc(segment_zero->len << 2);
 
-        for (int i = 0; i < copied_segment->len; i++) {
+        for (int i = 0; i < seg_len; i++) {
                 segment_zero->arr[i] = copied_segment->arr[i];
         }
         mem->seg_zero = segment_zero;
@@ -337,79 +349,87 @@ static inline void free_memory(Memory mem) {
 
 
 
-static inline int decode(uint32_t codeword, uint32_t registers[],
-                        Memory mem, uint32_t *program_counter)                           
+static inline void decode(uint32_t registers[], Memory mem)                           
 {
+        /* initialize program counter */
+        uint32_t program_counter = 0;
+
+        /* load in 32-bit instructions */
+        Um_instruction codeword = mem->seg_zero->arr[program_counter]; 
+        
         uint32_t op_mask = 4026531840;
         uint32_t ra_mask = 448;
         uint32_t rb_mask = 56;
         uint32_t rc_mask = 7;
+        
         uint32_t opcode = ((codeword & op_mask) >> 28);
 
-        uint32_t ra = ((codeword & ra_mask) >> 6);
-        uint32_t rb = ((codeword & rb_mask) >> 3); 
-        uint32_t rc = (codeword & rc_mask); 
+        while (opcode != 7) {
 
-    
-        switch (opcode) {
-                case 0:
-                        cond_move(ra, rb, rc, 
-                                  registers);
-                        break;
-                case 1:
-                        segmented_load(ra, rb, rc,
-                                       registers, mem);
-                        break;
-                case 2: 
-                        segmented_store(ra, rb, rc,
+                uint32_t ra = ((codeword & ra_mask) >> 6);
+                uint32_t rb = ((codeword & rb_mask) >> 3); 
+                uint32_t rc = (codeword & rc_mask); 
+
+                switch (opcode) {
+                        case 0:
+                                cond_move(ra, rb, rc, 
+                                        registers);
+                                break;
+                        case 1:
+                                segmented_load(ra, rb, rc,
                                         registers, mem);
-                        break;
-                case 3:
-                        addition(ra, rb, rc, 
-                                 registers);
-                        break;
-                case 4:
-                        multiply(ra, rb, rc, 
-                                 registers);
-                        break;
-                case 5: 
-                        division(ra, rb, rc,
-                                 registers);
-                        break;
-                case 6: 
-                        nand(ra, rb, rc, registers);
-                        break;
-                case 7: 
-                        return opcode;
-                case 8: 
-                        map_segment(rb, rc, registers, mem);
-                        break;
-                case 9: 
-                        unmap_segment(rc, registers, mem);
-                        break;
-                case 10: 
-                        output(rc, registers);
-                        break;
-                case 11: 
-                        input(rc, registers);
-                        break;
-                case 12: 
-                        load_program(rb, rc, registers, 
-                                     mem, program_counter); 
-                        break;
-                case 13: 
-                        ra_mask = 234881024;
-                        uint32_t ra = ((codeword & ra_mask) >> 25);
-                        uint32_t val_mask = 33554431;
-                        uint32_t value = (codeword & val_mask);
-                        load_value(ra, value, registers);
-                        break;
-        }
-        if (opcode != 12) {
-                *program_counter = *program_counter + 1;
-        
-        } 
-        return opcode;               
+                                break;
+                        case 2: 
+                                segmented_store(ra, rb, rc,
+                                                registers, mem);
+                                break;
+                        case 3:
+                                addition(ra, rb, rc, 
+                                        registers);
+                                break;
+                        case 4:
+                                multiply(ra, rb, rc, 
+                                        registers);
+                                break;
+                        case 5: 
+                                division(ra, rb, rc,
+                                        registers);
+                                break;
+                        case 6: 
+                                nand(ra, rb, rc, registers);
+                                break;
+                        case 7: 
+                                return;
+                        case 8: 
+                                map_segment(rb, rc, registers, mem);
+                                break;
+                        case 9: 
+                                unmap_segment(rc, registers, mem);
+                                break;
+                        case 10: 
+                                output(rc, registers);
+                                break;
+                        case 11: 
+                                input(rc, registers);
+                                break;
+                        case 12: 
+                                load_program(rb, registers, mem);
+                                program_counter = registers[rc] - 1;
+                                break;
+                        case 13: 
+                                ra_mask = 234881024;
+                                uint32_t ra = ((codeword & ra_mask) >> 25);
+                                uint32_t val_mask = 33554431;
+                                uint32_t value = (codeword & val_mask);
+                                load_value(ra, value, registers);
+                                ra_mask = 448;
+
+                                break;
+                }
+                program_counter++;
+                codeword = mem->seg_zero->arr[program_counter]; 
+                opcode = ((codeword & op_mask) >> 28);
+        }            
 }
 
 
@@ -424,24 +444,10 @@ int main(int argc, char *argv[])
         
         /* create registers */
         uint32_t registers[8] = {0, 0, 0, 0, 0, 0, 0, 0};  
-       
-        /* initialize program counter */
-        uint32_t pc_value = 0;
-        uint32_t *program_counter = &pc_value;
         
         read_file(argc, argv, mem);
-
-        /* load in 32-bit instructions */
-        Um_instruction codeword = mem->seg_zero->arr[*program_counter]; 
- 
-        int opcode;
-        opcode = decode(codeword, registers, mem, program_counter);
-        
-        while (opcode != 7) {
-                codeword = mem->seg_zero->arr[*program_counter];                  
-
-                opcode = decode(codeword, registers, mem, program_counter);
-        }   
+               
+        decode(registers, mem);
         
         free_memory(mem);
    
